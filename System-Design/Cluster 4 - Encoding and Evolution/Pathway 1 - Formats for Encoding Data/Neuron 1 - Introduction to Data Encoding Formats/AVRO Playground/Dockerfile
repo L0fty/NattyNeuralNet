@@ -4,11 +4,11 @@ FROM node:14-alpine
 # Create app directory
 WORKDIR /usr/src/app
 
-# Install Express directly
-RUN npm install express
-
 # Copy application source code
 COPY ./app/ .
+
+# Install dependencies
+RUN npm install express avsc
 
 # Expose port 8080
 EXPOSE 8080
