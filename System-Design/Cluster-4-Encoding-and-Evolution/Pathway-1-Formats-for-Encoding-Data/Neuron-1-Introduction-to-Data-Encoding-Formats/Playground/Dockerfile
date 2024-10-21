@@ -8,7 +8,7 @@ WORKDIR /usr/src/app
 COPY ./app/ .
 
 # Install dependencies
-RUN npm install express avsc
+RUN npm install express
 
 # Expose port 8080
 EXPOSE 8080
