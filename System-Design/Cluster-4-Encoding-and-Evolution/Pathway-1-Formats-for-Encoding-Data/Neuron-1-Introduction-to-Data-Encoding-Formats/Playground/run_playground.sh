@@ -3,8 +3,8 @@
 # ---- Global Variables ----
 
 # Docker image and container names
-IMAGE_NAME="avro-playground"
-CONTAINER_NAME="avro-playground-container"
+IMAGE_NAME="encoder-playground"
+CONTAINER_NAME="encoder-playground-container"
 
 # Application URL
 APP_URL="http://localhost:8080"
@@ -161,7 +161,7 @@ open_browser() {
 # ---- Main Script Execution ----
 # The main part of the script orchestrates the setup process.
 
-log_info "Starting the Avro playground setup..."
+log_info "Starting the playground setup..."
 
 # Step 1: Check if Docker is installed and running
 check_docker
@@ -183,4 +183,4 @@ sleep 5
 open_browser
 
 # Log a final success message
-log_success "Avro playground is running at $APP_URL"
+log_success "The playground is running at $APP_URL"
