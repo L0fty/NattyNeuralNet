@@ -1,145 +1,170 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <title>Encoding/Decoding Playground</title>
-    <style></style>
-    <script src="/protobuf.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/thrift@0.21.0/lib/nodejs/lib/thrift/browser.min.js"></script>
-    <script src="/avsc.min.js"></script>
-    <script src="/schema.avsc"></script>
-  </head>
 
-  <body>
-    <h2>Encoding/Decoding <span id="encoderName"></span></h2>
-    <h3>Change Encoder</h3>
-    <select id="encoderSelect"></select>
-    <section id="schema">
-      <h3 id="encoderSchema"></h3>
-      <textarea></textarea>
-    </section>
-    <section id="data">
-      <h3>Data</h3>
-      <textarea></textarea>
-    </section>
-    <section id="encoded">
-      <h3>Encoded (<span id="encoderFormat"></span>)</h3>
-      <textarea></textarea>
-    </section>
-    <script>
-      let selected = 0;
-      const encoders = ["JSON", "Protobuf", "Thrift", "Avro"];
+<head>
+  <meta charset="UTF-8" />
+  <title>Encoding/Decoding Playground</title>
+  <style></style>
+  <script src="/protobuf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/thrift@0.21.0/lib/nodejs/lib/thrift/browser.min.js"></script>
+  <script src="/avsc.min.js"></script>
+</head>
 
-      const encoderMap = {
-        JSON: {
-          name: "JSON",
-          format: "String",
-          encode: (data, _) => JSON.stringify(data),
-          decode: (data, _) => JSON.parse(data),
+<body>
+  <h2>Encoding/Decoding <span id="encoderName"></span></h2>
+  <h3>Change Encoder</h3>
+  <select id="encoderSelect"></select>
+  <section id="schema">
+    <h3 id="encoderSchema"></h3>
+    <textarea id="schemaContent"></textarea>
+  </section>
+  <section id="data">
+    <h3>Data</h3>
+    <textarea></textarea>
+  </section>
+  <section id="encoded">
+    <h3>Encoded (<span id="encoderFormat"></span>)</h3>
+    <textarea></textarea>
+  </section>
+  <script>
+    let selected = 0;
+    const encoders = ["JSON", "Protobuf", "Thrift", "Avro"];
+
+    const encoderMap = {
+      JSON: {
+        name: "JSON",
+        format: "String",
+        encode: (data, _) => JSON.stringify(data),
+        decode: (data, _) => JSON.parse(data),
+      },
+      Protobuf: {
+        name: "Protobuf",
+        format: "Binary",
+        encode: (data, MessageSchema) => {
+          const message = MessageSchema.create(data);
+          return MessageSchema.encode(message).finish();
         },
-        Protobuf: {
-          name: "Protobuf",
-          format: "Binary",
-          encode: (data, MessageSchema) => {
-            const message = MessageSchema.create(data);
-            return MessageSchema.encode(message).finish();
-          },
-          decode: (buffer, MessageSchema) => {
-            return MessageSchema.decode(buffer);
-          },
-          schema: "protobuf",
+        decode: (buffer, MessageSchema) => {
+          return MessageSchema.decode(buffer);
         },
-        Thrift: {
-          name: "Thrift",
-          format: "Binary",
-          encode: (data, Struct) => {
-            const transport = new Thrift.TBufferedTransport();
-            const protocol = new Thrift.TBinaryProtocol(transport);
-            const myStruct = new Struct(data);
-            myStruct.write(protocol);
-            return transport.outBuffers;
-          },
-          decode: (buffer, Struct) => {
-            const transport = new Thrift.TBufferedTransport(buffer);
-            const protocol = new Thrift.TBinaryProtocol(transport);
-            const myStruct = new Struct();
-            myStruct.read(protocol);
-            return myStruct;
-          },
-          schema: "thrift",
+        schema: "protobuf",
+      },
+      Thrift: {
+        name: "Thrift",
+        format: "Binary",
+        encode: (data, Struct) => {
+          const transport = new Thrift.TBufferedTransport();
+          const protocol = new Thrift.TBinaryProtocol(transport);
+          const myStruct = new Struct(data);
+          myStruct.write(protocol);
+          return transport.outBuffers;
         },
-        Avro: {
-          name: "Avro",
-          format: "Binary",
-          encode: (data, schema) => {
-            const type = avro.Type.forSchema(schema);
-            return type.toBuffer(data);
-          },
-          decode: (buffer, schema) => {
-            const type = avro.Type.forSchema(schema);
-            return type.fromBuffer(buffer);
-          },
-          schema: "avsc",
+        decode: (buffer, Struct) => {
+          const transport = new Thrift.TBufferedTransport(buffer);
+          const protocol = new Thrift.TBinaryProtocol(transport);
+          const myStruct = new Struct();
+          myStruct.read(protocol);
+          return myStruct;
         },
-      };
+        schema: "thrift",
+      },
+      Avro: {
+        name: "Avro",
+        format: "Binary",
+        encode: (data, schema) => {
+          const type = avro.Type.forSchema(schema);
+          return type.toBuffer(data);
+        },
+        decode: (buffer, schema) => {
+          const type = avro.Type.forSchema(schema);
+          return type.fromBuffer(buffer);
+        },
+        schema: "avsc",
+      },
+    };
 
-      function getSelectedEncoder() {
-        const encoderKey = encoders[selected];
-        const encoder = encoderMap[encoderKey];
-        return encoder;
+    function getSelectedEncoder() {
+      const encoderKey = encoders[selected];
+      const encoder = encoderMap[encoderKey];
+      return encoder;
+    }
+    const cache = {};
+    async function fetchSchema(encoder) {
+      if (!encoder.schema) return null;
+
+      const url = `/person.${encoder.schema}`;
+      if (cache[url]) {
+        return cache[url];
       }
-
-      function encode(data) {
-        const { encode, schema } = getSelectedEncoder();
-        return encode(data, schema);
+      try {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`Failed to load ${url}`);
+        const content = await response.text();
+        cache[url] = content;
+        return content;
+      } catch (error) {
+        console.error(error);
+        return null;
       }
+    }
 
-      function decode(encodedData) {
-        const { decode, schema } = getSelectedEncoder();
-        return encoder.decode(encodedData, schema);
-      }
+    function encode(data) {
+      const { encode, schema } = getSelectedEncoder();
+      return encode(data, schema);
+    }
 
-      function renderSelection() {
-        const encoder = getSelectedEncoder();
-        document.getElementById("encoderName").textContent = encoder.name;
-        document.getElementById("encoderFormat").textContent = encoder.format;
-        if (encoder.schema) {
-          document.getElementById("schema").style.display = "block";
-          document.getElementById(
-            "encoderSchema"
-          ).textContent = `Schema ${encoder.schema}`;
-        } else {
-          document.getElementById("schema").style.display = "none";
-        }
-      }
+    function decode(encodedData) {
+      const { decode, schema } = getSelectedEncoder();
+      return encoder.decode(encodedData, schema);
+    }
 
-      function selectEncoder(index) {
-        if (index !== selected) {
-          selected = index;
-          document.getElementById("encoderSelect").selected = index;
-          renderSelection();
-        }
-      }
-
-      function mountEncoderSelect() {
-        const encoderSelect = document.getElementById("encoderSelect");
-        encoders.forEach((encoder, index) => {
-          const option = document.createElement("option");
-          option.value = index;
-          option.text = encoder;
-          encoderSelect.appendChild(option);
+    async function renderSelection() {
+      const encoder = getSelectedEncoder();
+      document.getElementById("encoderName").textContent = encoder.name;
+      document.getElementById("encoderFormat").textContent = encoder.format;
+      if (encoder.schema) {
+        document.getElementById("schema").style.display = "block";
+        document.getElementById(
+          "encoderSchema"
+        ).textContent = `Schema ${encoder.schema}`;
+        fetchSchema(encoder).then((result) => {
+          const schemaContent = result
+          console.dir(schemaContent)
+          document.getElementById("schemaContent").value = schemaContent || "Schema not available.";
         });
-        encoderSelect.addEventListener("change", ({ target: { value } }) =>
-          selectEncoder(value)
-        );
+      } else {
+        document.getElementById("schema").style.display = "none";
       }
+    }
 
-      function mount() {
-        mountEncoderSelect();
+    function selectEncoder(index) {
+      if (index !== selected) {
+        selected = index;
+        document.getElementById("encoderSelect").selected = index;
         renderSelection();
       }
+    }
 
-      mount();
-    </script>
-  </body>
+    function mountEncoderSelect() {
+      const encoderSelect = document.getElementById("encoderSelect");
+      encoders.forEach((encoder, index) => {
+        const option = document.createElement("option");
+        option.value = index;
+        option.text = encoder;
+        encoderSelect.appendChild(option);
+      });
+      encoderSelect.addEventListener("change", ({ target: { value } }) =>
+        selectEncoder(value)
+      );
+    }
+
+    function mount() {
+      mountEncoderSelect();
+      renderSelection();
+    }
+
+    mount();
+  </script>
+</body>
+
 </html>

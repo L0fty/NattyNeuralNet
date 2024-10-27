@@ -1,0 +1,12 @@
+{
+  "name": "Person",
+  "type": "record",
+  "fields": [
+    { "name": "id", "type": "int" },
+    { "name": "name", "type": "string" },
+    { "name": "age", "type": "int" },
+    { "name": "email", "type": "string" },
+    { "name": "isActive", "type": "boolean" },
+    { "name": "scores", "type": { "type": "array", "items": "float" } }
+  ]
+}
