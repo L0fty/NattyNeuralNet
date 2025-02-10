@@ -133,11 +133,11 @@ cleanup_container() {
 # This function runs the Docker container in detached mode, mapping the required port.
 
 run_container() {
-    log_info "Running the Docker container '$CONTAINER_NAME'..."
+    log_info "Building and running the Docker container via Docker Compose..."
 
     # Run the container and handle any errors
-    docker run -d -p 8080:8080 --name "$CONTAINER_NAME" "$IMAGE_NAME" || {
-        log_error "Failed to run Docker container."
+    docker-compose up -d --build || {
+        log_error "Failed to build and run the container via Docker Compose."
         exit 1
     }
 

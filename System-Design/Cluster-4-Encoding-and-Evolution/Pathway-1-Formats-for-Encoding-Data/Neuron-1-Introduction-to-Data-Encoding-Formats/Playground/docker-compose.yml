@@ -1,0 +1,17 @@
+version: '3'
+services:
+  encoder-playground:
+    build: .
+    image: encoder-playground
+    container_name: encoder-playground-container
+    ports:
+      - "8080:8080"
+      - "35729:35729"
+    volumes:
+      - ./app:/usr/src/app
+      - node_modules:/usr/src/app/node_modules
+    environment:
+      - NODE_ENV=development
+
+volumes:
+  node_modules:

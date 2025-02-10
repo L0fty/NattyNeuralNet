@@ -1,12 +1,11 @@
 {
-  "name": "Person",
+  "namespace": "com.example",
   "type": "record",
+  "name": "Person",
   "fields": [
-    { "name": "id", "type": "int" },
+    { "name": "id", "type": "string" },
     { "name": "name", "type": "string" },
-    { "name": "age", "type": "int" },
     { "name": "email", "type": "string" },
-    { "name": "isActive", "type": "boolean" },
-    { "name": "scores", "type": { "type": "array", "items": "float" } }
+    { "name": "age", "type": "int" }
   ]
 }

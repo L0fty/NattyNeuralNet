@@ -2,6 +2,24 @@ const express = require('express');
 const app = express();
 const path = require('path');
 
+// LiveReload Setup
+const livereload = require('livereload');
+const connectLivereload = require('connect-livereload');
+
+// Create a livereload server that watches the app directory
+const liveReloadServer = livereload.createServer();
+liveReloadServer.watch(path.join(__dirname));
+
+// Inject the livereload script into served HTML pages
+app.use(connectLivereload());
+
+// Optionally, trigger a refresh once the connection is established:
+liveReloadServer.server.once('connection', () => {
+  setTimeout(() => {
+    liveReloadServer.refresh('/');
+  }, 100);
+});
+
 // Middleware to parse JSON bodies
 app.use(express.json());
 

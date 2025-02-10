@@ -8,10 +8,12 @@ WORKDIR /usr/src/app
 COPY ./app/ .
 
 # Install dependencies
-RUN npm install express
+RUN npm install express livereload connect-livereload
+RUN npm install -g nodemon
 
-# Expose port 8080
+# Expose ports
 EXPOSE 8080
+EXPOSE 35729
 
 # Start the server
-CMD [ "node", "server.js" ]
+CMD ["sh", "-c", "npm install express livereload connect-livereload && npx nodemon --ext js,json,html,css server.js"]

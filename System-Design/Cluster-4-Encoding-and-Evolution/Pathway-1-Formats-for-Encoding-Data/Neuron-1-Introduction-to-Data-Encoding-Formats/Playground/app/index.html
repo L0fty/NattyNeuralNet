@@ -1,57 +1,92 @@
 <!DOCTYPE html>
 <html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Encoding/Decoding Playground - Functional UI Split</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 20px;
+      }
+      textarea {
+        width: 100%;
+        height: 150px;
+        margin-bottom: 10px;
+      }
+      select {
+        margin-bottom: 10px;
+      }
+      .error {
+        color: red;
+        font-weight: bold;
+      }
+      .button-group button {
+        margin-right: 10px;
+      }
+    </style>
+    <!-- External libraries -->
+    <script src="/protobuf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/thrift@0.21.0/lib/nodejs/lib/thrift/browser.min.js"></script>
+    <script src="/avsc.min.js"></script>
+    <script src="http://localhost:35729/livereload.js?snipver=1"></script>
+  </head>
+  <body>
+    <h2>Encoding/Decoding <span id="encoderName"></span></h2>
+    <h3>Change Encoder</h3>
+    <select id="encoderSelect"></select>
 
-<head>
-  <meta charset="UTF-8" />
-  <title>Encoding/Decoding Playground</title>
-  <style></style>
-  <script src="/protobuf.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/thrift@0.21.0/lib/nodejs/lib/thrift/browser.min.js"></script>
-  <script src="/avsc.min.js"></script>
-</head>
+    <!-- Schema Section -->
+    <section id="schema">
+      <h3 id="encoderSchema"></h3>
+      <textarea id="schemaContent"></textarea>
+    </section>
 
-<body>
-  <h2>Encoding/Decoding <span id="encoderName"></span></h2>
-  <h3>Change Encoder</h3>
-  <select id="encoderSelect"></select>
-  <section id="schema">
-    <h3 id="encoderSchema"></h3>
-    <textarea id="schemaContent"></textarea>
-  </section>
-  <section id="data">
-    <h3>Data</h3>
-    <textarea></textarea>
-  </section>
-  <section id="encoded">
-    <h3>Encoded (<span id="encoderFormat"></span>)</h3>
-    <textarea></textarea>
-  </section>
-  <script>
-    let selected = 0;
-    const encoders = ["JSON", "Protobuf", "Thrift", "Avro"];
+    <!-- Data Section -->
+    <section id="data">
+      <h3>Data (JSON format)</h3>
+      <textarea id="dataContent"></textarea>
+    </section>
 
-    const encoderMap = {
-      JSON: {
+    <!-- Actions and Error Display -->
+    <section id="actions">
+      <div class="button-group">
+        <button id="encodeButton">Encode</button>
+        <button id="decodeButton">Decode</button>
+      </div>
+      <div id="error" class="error"></div>
+    </section>
+
+    <!-- Encoded Output Section -->
+    <section id="encoded">
+      <h3>Encoded (<span id="encoderFormat"></span>)</h3>
+      <textarea id="encodedContent"></textarea>
+    </section>
+
+    <script>
+      // --------------------- Encoder Functions ---------------------
+      const JSONEncoder = {
         name: "JSON",
         format: "String",
-        encode: (data, _) => JSON.stringify(data),
-        decode: (data, _) => JSON.parse(data),
-      },
-      Protobuf: {
+        schemaType: null,
+        encode: (data) => JSON.stringify(data, null, 2),
+        decode: (data) => JSON.parse(data),
+      };
+
+      const ProtobufEncoder = {
         name: "Protobuf",
         format: "Binary",
+        schemaType: "protobuf",
         encode: (data, MessageSchema) => {
           const message = MessageSchema.create(data);
           return MessageSchema.encode(message).finish();
         },
-        decode: (buffer, MessageSchema) => {
-          return MessageSchema.decode(buffer);
-        },
-        schema: "protobuf",
-      },
-      Thrift: {
+        decode: (buffer, MessageSchema) => MessageSchema.decode(buffer),
+      };
+
+      const ThriftEncoder = {
         name: "Thrift",
         format: "Binary",
+        schemaType: "thrift",
         encode: (data, Struct) => {
           const transport = new Thrift.TBufferedTransport();
           const protocol = new Thrift.TBinaryProtocol(transport);
@@ -66,11 +101,12 @@
           myStruct.read(protocol);
           return myStruct;
         },
-        schema: "thrift",
-      },
-      Avro: {
+      };
+
+      const AvroEncoder = {
         name: "Avro",
         format: "Binary",
+        schemaType: "avsc",
         encode: (data, schema) => {
           const type = avro.Type.forSchema(schema);
           return type.toBuffer(data);
@@ -79,92 +115,233 @@
           const type = avro.Type.forSchema(schema);
           return type.fromBuffer(buffer);
         },
-        schema: "avsc",
-      },
-    };
+      };
 
-    function getSelectedEncoder() {
-      const encoderKey = encoders[selected];
-      const encoder = encoderMap[encoderKey];
-      return encoder;
-    }
-    const cache = {};
-    async function fetchSchema(encoder) {
-      if (!encoder.schema) return null;
+      // --------------------- Schema Loader ---------------------
+      // Returns a module with a cached loadSchema function.
+      const createSchemaLoader = () => {
+        const cache = {};
+        const loadSchema = async (schemaType) => {
+          if (!schemaType) return null;
+          const url = `/person.${schemaType}`;
+          if (cache[url]) return cache[url];
+          const response = await fetch(url);
+          if (!response.ok) {
+            throw new Error(`Failed to load schema: ${url}`);
+          }
+          const text = await response.text();
+          cache[url] = text;
+          return text;
+        };
+        return { loadSchema };
+      };
 
-      const url = `/person.${encoder.schema}`;
-      if (cache[url]) {
-        return cache[url];
-      }
-      try {
-        const response = await fetch(url);
-        if (!response.ok) throw new Error(`Failed to load ${url}`);
-        const content = await response.text();
-        cache[url] = content;
-        return content;
-      } catch (error) {
-        console.error(error);
-        return null;
-      }
-    }
+      // --------------------- Encoder Service ---------------------
+      // Encapsulates the encoding/decoding business logic.
+      const encodeData = async (encoder, schemaLoader, data) => {
+        let schema = null;
+        if (encoder.schemaType) {
+          schema = await schemaLoader.loadSchema(encoder.schemaType);
+        }
+        return encoder.encode(data, schema);
+      };
 
-    function encode(data) {
-      const { encode, schema } = getSelectedEncoder();
-      return encode(data, schema);
-    }
+      const decodeData = async (encoder, schemaLoader, data) => {
+        let schema = null;
+        if (encoder.schemaType) {
+          schema = await schemaLoader.loadSchema(encoder.schemaType);
+        }
+        return encoder.decode(data, schema);
+      };
 
-    function decode(encodedData) {
-      const { decode, schema } = getSelectedEncoder();
-      return encoder.decode(encodedData, schema);
-    }
+      // --------------------- UI Elements ---------------------
+      const UIElements = (() => {
+        return {
+          encoderSelect: document.getElementById("encoderSelect"),
+          encoderNameEl: document.getElementById("encoderName"),
+          encoderFormatEl: document.getElementById("encoderFormat"),
+          encoderSchemaEl: document.getElementById("encoderSchema"),
+          schemaSection: document.getElementById("schema"),
+          schemaContentEl: document.getElementById("schemaContent"),
+          dataContentEl: document.getElementById("dataContent"),
+          encodedContentEl: document.getElementById("encodedContent"),
+          errorEl: document.getElementById("error"),
+          encodeButtonEl: document.getElementById("encodeButton"),
+          decodeButtonEl: document.getElementById("decodeButton"),
+        };
+      })();
 
-    async function renderSelection() {
-      const encoder = getSelectedEncoder();
-      document.getElementById("encoderName").textContent = encoder.name;
-      document.getElementById("encoderFormat").textContent = encoder.format;
-      if (encoder.schema) {
-        document.getElementById("schema").style.display = "block";
-        document.getElementById(
-          "encoderSchema"
-        ).textContent = `Schema ${encoder.schema}`;
-        fetchSchema(encoder).then((result) => {
-          const schemaContent = result
-          console.dir(schemaContent)
-          document.getElementById("schemaContent").value = schemaContent || "Schema not available.";
+      // --------------------- Error Controller ---------------------
+      const ErrorController = (() => {
+        const displayError = (message) => {
+          UIElements.errorEl.textContent = message;
+        };
+        const clearError = () => {
+          UIElements.errorEl.textContent = "";
+        };
+        return { displayError, clearError };
+      })();
+
+      // --------------------- Encoder Info Controller ---------------------
+      const EncoderInfoController = (() => {
+        const updateEncoderInfo = (
+          name,
+          format,
+          schemaType,
+          schemaContent = ""
+        ) => {
+          UIElements.encoderNameEl.textContent = name;
+          UIElements.encoderFormatEl.textContent = format;
+          if (schemaType) {
+            UIElements.schemaSection.style.display = "block";
+            UIElements.encoderSchemaEl.textContent = `Schema (${schemaType})`;
+            UIElements.schemaContentEl.value = schemaContent;
+          } else {
+            UIElements.schemaSection.style.display = "none";
+          }
+        };
+        return { updateEncoderInfo };
+      })();
+
+      // --------------------- Data Controller ---------------------
+      const DataController = (() => {
+        const getDataInput = () => {
+          try {
+            return JSON.parse(UIElements.dataContentEl.value);
+          } catch (e) {
+            ErrorController.displayError("Invalid JSON in data input.");
+            return null;
+          }
+        };
+        return { getDataInput, dataContentEl: UIElements.dataContentEl };
+      })();
+
+      // --------------------- Encoded Controller ---------------------
+      const EncodedController = (() => {
+        const bufferToBase64 = (buffer) => {
+          let binary = "";
+          const bytes = new Uint8Array(buffer);
+          for (let i = 0; i < bytes.byteLength; i++) {
+            binary += String.fromCharCode(bytes[i]);
+          }
+          return btoa(binary);
+        };
+
+        const base64ToBuffer = (base64) => {
+          const binaryString = atob(base64);
+          const len = binaryString.length;
+          const bytes = new Uint8Array(len);
+          for (let i = 0; i < len; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+          }
+          return bytes;
+        };
+
+        const displayEncodedResult = (result, format) => {
+          if (format === "Binary") {
+            let base64Result = "";
+            if (result instanceof Uint8Array) {
+              base64Result = bufferToBase64(result);
+            } else if (Array.isArray(result)) {
+              base64Result = result.map((r) => bufferToBase64(r)).join("\n");
+            }
+            UIElements.encodedContentEl.value = base64Result;
+          } else {
+            UIElements.encodedContentEl.value = result;
+          }
+        };
+
+        const getEncodedInput = (format) => {
+          const input = UIElements.encodedContentEl.value.trim();
+          return format === "Binary" ? base64ToBuffer(input) : input;
+        };
+
+        return { displayEncodedResult, getEncodedInput };
+      })();
+
+      // --------------------- Main Application Logic ---------------------
+      const initApp = () => {
+        const encoders = [
+          JSONEncoder,
+          ProtobufEncoder,
+          ThriftEncoder,
+          AvroEncoder,
+        ];
+        const schemaLoader = createSchemaLoader();
+        let currentEncoderIndex = 0;
+
+        // Populate the encoder dropdown.
+        encoders.forEach((encoder, index) => {
+          const option = document.createElement("option");
+          option.value = index;
+          option.textContent = encoder.name;
+          UIElements.encoderSelect.appendChild(option);
         });
-      } else {
-        document.getElementById("schema").style.display = "none";
-      }
-    }
 
-    function selectEncoder(index) {
-      if (index !== selected) {
-        selected = index;
-        document.getElementById("encoderSelect").selected = index;
-        renderSelection();
-      }
-    }
+        const renderCurrentEncoder = async () => {
+          ErrorController.clearError();
+          const encoder = encoders[currentEncoderIndex];
+          let schemaContent = "";
+          if (encoder.schemaType) {
+            try {
+              schemaContent = await schemaLoader.loadSchema(encoder.schemaType);
+            } catch (e) {
+              ErrorController.displayError(e.message);
+            }
+          }
+          EncoderInfoController.updateEncoderInfo(
+            encoder.name,
+            encoder.format,
+            encoder.schemaType,
+            schemaContent
+          );
+        };
 
-    function mountEncoderSelect() {
-      const encoderSelect = document.getElementById("encoderSelect");
-      encoders.forEach((encoder, index) => {
-        const option = document.createElement("option");
-        option.value = index;
-        option.text = encoder;
-        encoderSelect.appendChild(option);
-      });
-      encoderSelect.addEventListener("change", ({ target: { value } }) =>
-        selectEncoder(value)
-      );
-    }
+        UIElements.encoderSelect.addEventListener("change", async (e) => {
+          currentEncoderIndex = parseInt(e.target.value, 10);
+          await renderCurrentEncoder();
+        });
 
-    function mount() {
-      mountEncoderSelect();
-      renderSelection();
-    }
+        UIElements.encodeButtonEl.addEventListener("click", async () => {
+          ErrorController.clearError();
+          const encoder = encoders[currentEncoderIndex];
+          const data = DataController.getDataInput();
+          if (data === null) return;
+          try {
+            const result = await encodeData(encoder, schemaLoader, data);
+            EncodedController.displayEncodedResult(result, encoder.format);
+          } catch (e) {
+            ErrorController.displayError(e.message);
+          }
+        });
 
-    mount();
-  </script>
-</body>
+        UIElements.decodeButtonEl.addEventListener("click", async () => {
+          ErrorController.clearError();
+          const encoder = encoders[currentEncoderIndex];
+          try {
+            const encodedInput = EncodedController.getEncodedInput(
+              encoder.format
+            );
+            const result = await decodeData(
+              encoder,
+              schemaLoader,
+              encodedInput
+            );
+            DataController.dataContentEl.value = JSON.stringify(
+              result,
+              null,
+              2
+            );
+          } catch (e) {
+            ErrorController.displayError(e.message);
+          }
+        });
 
+        // Initial render.
+        renderCurrentEncoder();
+      };
+
+      document.addEventListener("DOMContentLoaded", initApp);
+    </script>
+  </body>
 </html>

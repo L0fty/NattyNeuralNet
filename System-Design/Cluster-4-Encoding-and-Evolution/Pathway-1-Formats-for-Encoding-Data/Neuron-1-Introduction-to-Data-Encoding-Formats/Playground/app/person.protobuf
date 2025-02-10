@@ -1,9 +1,7 @@
 syntax = "proto3";
 message Person {
-  int32 id = 1;
+  string id = 1;
   string name = 2;
-  int32 age = 3;
-  string email = 4;
-  bool isActive = 5;
-  repeated float scores = 6;
+  string email = 3;
+  int32 age = 4;
 }

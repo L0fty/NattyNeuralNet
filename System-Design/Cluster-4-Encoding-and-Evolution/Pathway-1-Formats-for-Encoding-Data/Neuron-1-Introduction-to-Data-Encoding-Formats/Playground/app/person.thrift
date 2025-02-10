@@ -1,8 +1,6 @@
-{
-  "id": 123,
-  "name": "John Doe",
-  "age": 30,
-  "email": "johndoe@example.com",
-  "isActive": true,
-  "scores": [95.5, 87.0, 92.3]
+struct Person {
+  1: string id,
+  2: string name,
+  3: string email,
+  4: i32 age
 }
