@@ -117,24 +117,37 @@
         },
       };
 
-      // --------------------- Schema Loader ---------------------
-      // Returns a module with a cached loadSchema function.
-      const createSchemaLoader = () => {
+      // --------------------- Generic Resource Loader ---------------------
+      // This generic function accepts a URL mapping function and a transform function.
+      // It also caches responses by URL.
+      const createResourceLoader = (urlMapper, transform) => {
         const cache = {};
-        const loadSchema = async (schemaType) => {
-          if (!schemaType) return null;
-          const url = `/person.${schemaType}`;
+        return async (param) => {
+          const url = urlMapper(param);
           if (cache[url]) return cache[url];
           const response = await fetch(url);
           if (!response.ok) {
-            throw new Error(`Failed to load schema: ${url}`);
+            throw new Error(`Failed to load resource: ${url}`);
           }
-          const text = await response.text();
-          cache[url] = text;
-          return text;
+          const data = await transform(response);
+          cache[url] = data;
+          return data;
         };
-        return { loadSchema };
       };
+
+      // --------------------- Schema Loader ---------------------
+      // Uses the generic loader to load a schema based on its type.
+      const loadSchema = createResourceLoader(
+        (schemaType) => `/person.${schemaType}`,
+        (response) => response.text()
+      );
+
+      // --------------------- Payload Loader ---------------------
+      // Uses the generic loader to load the JSON payload.
+      const loadPayload = createResourceLoader(
+        () => `/person.json`,
+        (response) => response.json()
+      );
 
       // --------------------- Encoder Service ---------------------
       // Encapsulates the encoding/decoding business logic.
@@ -267,7 +280,6 @@
           ThriftEncoder,
           AvroEncoder,
         ];
-        const schemaLoader = createSchemaLoader();
         let currentEncoderIndex = 0;
 
         // Populate the encoder dropdown.
@@ -284,7 +296,7 @@
           let schemaContent = "";
           if (encoder.schemaType) {
             try {
-              schemaContent = await schemaLoader.loadSchema(encoder.schemaType);
+              schemaContent = await loadSchema(encoder.schemaType);
             } catch (e) {
               ErrorController.displayError(e.message);
             }
@@ -295,6 +307,11 @@
             encoder.schemaType,
             schemaContent
           );
+        };
+
+        const renderCurrentData = async () => {
+          //Finish loading json
+
         };
 
         UIElements.encoderSelect.addEventListener("change", async (e) => {
