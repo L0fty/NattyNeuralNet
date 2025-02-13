@@ -310,8 +310,12 @@
         };
 
         const renderCurrentData = async () => {
-          //Finish loading json
-
+          try {
+            const payload = await loadPayload();
+            UIElements.dataContentEl.value = JSON.stringify(payload, null, 2);
+          } catch (e) {
+            ErrorController.displayError(e.message);
+          }
         };
 
         UIElements.encoderSelect.addEventListener("change", async (e) => {
@@ -356,6 +360,7 @@
 
         // Initial render.
         renderCurrentEncoder();
+        renderCurrentData();
       };
 
       document.addEventListener("DOMContentLoaded", initApp);
