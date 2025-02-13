@@ -135,7 +135,7 @@
         };
       };
 
-      // --------------------- Schema Loader ---------------------
+      // --------------------- Schema Helpers ---------------------
       // Uses the generic loader to load a schema based on its type.
       const loadSchema = createResourceLoader(
         (schemaType) => `/person.${schemaType}`,
@@ -150,21 +150,49 @@
       );
 
       // --------------------- Encoder Service ---------------------
-      // Encapsulates the encoding/decoding business logic.
-      const encodeData = async (encoder, schemaLoader, data) => {
+      const getSchemaFromTextarea = (encoder) => {
+        if (!encoder.schemaType) return null;
+        const schemaText = UIElements.schemaContentEl.value.trim();
+        if (!schemaText) {
+          throw new Error("No schema provided in the schema text area.");
+        }
+        if (encoder.schemaType === "avsc") {
+          return JSON.parse(schemaText);
+        }
+        return schemaText;
+      };
+
+      const encodeData = async (encoder, data) => {
         let schema = null;
         if (encoder.schemaType) {
-          schema = await schemaLoader.loadSchema(encoder.schemaType);
+          schema = getSchemaFromTextarea(encoder);
         }
         return encoder.encode(data, schema);
       };
 
-      const decodeData = async (encoder, schemaLoader, data) => {
+      const decodeData = async (encoder, data) => {
         let schema = null;
         if (encoder.schemaType) {
-          schema = await schemaLoader.loadSchema(encoder.schemaType);
+          schema = getSchemaFromTextarea(encoder);
         }
         return encoder.decode(data, schema);
+      };
+
+      const bufferToBinaryString = (buffer) => {
+        let binary = "";
+        const bytes = new Uint8Array(buffer);
+        for (let i = 0; i < bytes.byteLength; i++) {
+          // Convert each byte to an 8-digit binary string and add a space between bytes.
+          binary += bytes[i].toString(2).padStart(8, "0") + " ";
+        }
+        return binary.trim();
+      };
+
+      const binaryStringToBuffer = (binaryStr) => {
+        // Remove extra whitespace and split by space.
+        const byteStrings = binaryStr.split(" ").filter((b) => b.length > 0);
+        const bytes = byteStrings.map((b) => parseInt(b, 2));
+        return new Uint8Array(bytes);
       };
 
       // --------------------- UI Elements ---------------------
@@ -231,34 +259,17 @@
 
       // --------------------- Encoded Controller ---------------------
       const EncodedController = (() => {
-        const bufferToBase64 = (buffer) => {
-          let binary = "";
-          const bytes = new Uint8Array(buffer);
-          for (let i = 0; i < bytes.byteLength; i++) {
-            binary += String.fromCharCode(bytes[i]);
-          }
-          return btoa(binary);
-        };
-
-        const base64ToBuffer = (base64) => {
-          const binaryString = atob(base64);
-          const len = binaryString.length;
-          const bytes = new Uint8Array(len);
-          for (let i = 0; i < len; i++) {
-            bytes[i] = binaryString.charCodeAt(i);
-          }
-          return bytes;
-        };
-
         const displayEncodedResult = (result, format) => {
           if (format === "Binary") {
-            let base64Result = "";
+            let binaryResult = "";
             if (result instanceof Uint8Array) {
-              base64Result = bufferToBase64(result);
+              binaryResult = bufferToBinaryString(result);
             } else if (Array.isArray(result)) {
-              base64Result = result.map((r) => bufferToBase64(r)).join("\n");
+              binaryResult = result
+                .map((r) => bufferToBinaryString(r))
+                .join("\n");
             }
-            UIElements.encodedContentEl.value = base64Result;
+            UIElements.encodedContentEl.value = binaryResult;
           } else {
             UIElements.encodedContentEl.value = result;
           }
@@ -266,7 +277,7 @@
 
         const getEncodedInput = (format) => {
           const input = UIElements.encodedContentEl.value.trim();
-          return format === "Binary" ? base64ToBuffer(input) : input;
+          return format === "Binary" ? binaryStringToBuffer(input) : input;
         };
 
         return { displayEncodedResult, getEncodedInput };
@@ -321,6 +332,17 @@
         UIElements.encoderSelect.addEventListener("change", async (e) => {
           currentEncoderIndex = parseInt(e.target.value, 10);
           await renderCurrentEncoder();
+
+          const data = DataController.getDataInput();
+          if (data !== null) {
+            try {
+              const encoder = encoders[currentEncoderIndex];
+              const result = await encodeData(encoder, data);
+              EncodedController.displayEncodedResult(result, encoder.format);
+            } catch (err) {
+              ErrorController.displayError(err.message);
+            }
+          }
         });
 
         UIElements.encodeButtonEl.addEventListener("click", async () => {
@@ -329,7 +351,7 @@
           const data = DataController.getDataInput();
           if (data === null) return;
           try {
-            const result = await encodeData(encoder, schemaLoader, data);
+            const result = await encodeData(encoder, data);
             EncodedController.displayEncodedResult(result, encoder.format);
           } catch (e) {
             ErrorController.displayError(e.message);
@@ -343,11 +365,7 @@
             const encodedInput = EncodedController.getEncodedInput(
               encoder.format
             );
-            const result = await decodeData(
-              encoder,
-              schemaLoader,
-              encodedInput
-            );
+            const result = await decodeData(encoder, encodedInput);
             DataController.dataContentEl.value = JSON.stringify(
               result,
               null,
