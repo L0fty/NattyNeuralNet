@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>Encoding/Decoding Playground - Functional UI Split</title>
+    <title>Encoders Playground</title>
     <style>
       body {
         font-family: Arial, sans-serif;
@@ -26,12 +26,11 @@
     </style>
     <!-- External libraries -->
     <script src="/protobuf.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/thrift@0.21.0/lib/nodejs/lib/thrift/browser.min.js"></script>
     <script src="/avsc.min.js"></script>
     <script src="http://localhost:35729/livereload.js?snipver=1"></script>
   </head>
   <body>
-    <h2>Encoding/Decoding <span id="encoderName"></span></h2>
+    <h2>Encoders <span id="encoderName"></span></h2>
     <h3>Change Encoder</h3>
     <select id="encoderSelect"></select>
 
@@ -47,341 +46,920 @@
       <textarea id="dataContent"></textarea>
     </section>
 
-    <!-- Actions and Error Display -->
-    <section id="actions">
-      <div class="button-group">
-        <button id="encodeButton">Encode</button>
-        <button id="decodeButton">Decode</button>
-      </div>
-      <div id="error" class="error"></div>
-    </section>
-
     <!-- Encoded Output Section -->
     <section id="encoded">
       <h3>Encoded (<span id="encoderFormat"></span>)</h3>
-      <textarea id="encodedContent"></textarea>
+      <textarea id="encodedContent" readonly></textarea>
     </section>
-
+    <div id="error"></div>
     <script>
-      // --------------------- Encoder Functions ---------------------
-      const JSONEncoder = {
-        name: "JSON",
-        format: "String",
-        schemaType: null,
-        encode: (data) => JSON.stringify(data, null, 2),
-        decode: (data) => JSON.parse(data),
+      /**
+       * ========================================================================
+       * STATE MANAGEMENT SYSTEM
+       * 
+       * This section defines a simple state management system that allows components
+       * to subscribe to state changes and respond accordingly.
+       * ========================================================================
+       */
+
+      /**
+       * Creates a state manager to handle state changes and subscriptions
+       * @returns {Object} An object with methods to manage state
+       */
+      const createStateManager = () => {
+        // Set of functions that will be called when state changes
+        const subscribers = new Set();
+        let appState = null;
+
+        /**
+         * Subscribe to state changes
+         * @param {Function} subscriber - Function to call when state changes
+         * @returns {Function} Unsubscribe function
+         */
+        const subscribe = (subscriber) => {
+          subscribers.add(subscriber);
+          // Return unsubscribe function
+          return () => subscribers.delete(subscriber);
+        };
+
+        /**
+         * Get current application state
+         * @returns {Object} Current state
+         */
+        const getState = () => appState;
+
+        /**
+         * Set state directly (for initialization)
+         * @param {Object} newState - New state to set
+         * @returns {Object} Updated state
+         */
+        const setState = (newState) => {
+          appState = newState;
+          // Notify all subscribers of the state change
+          notifySubscribers();
+          return appState;
+        };
+
+        /**
+         * Process an event and update state if needed
+         * @param {Object} event - Event to process
+         * @returns {Object} Updated state
+         */
+        const processEvent = (event) => {
+          if (!appState) {
+            console.error("State machine not initialized");
+            return appState;
+          }
+
+          const nextState = stateTransitionFunction(appState, event);
+          if (nextState !== appState) {
+            appState = nextState;
+            notifySubscribers();
+          }
+          return appState;
+        };
+
+        /**
+         * Notify all subscribers about state changes
+         */
+        const notifySubscribers = () => {
+          subscribers.forEach((subscriber) => subscriber(appState));
+        };
+
+        /**
+         * Default state transition function - replaced during setup
+         */
+        let stateTransitionFunction = (state, event) => state;
+
+        /**
+         * Set the state transition function
+         * @param {Function} transitionFn - Function to calculate next state
+         */
+        const setTransitionFunction = (transitionFn) => {
+          stateTransitionFunction = transitionFn;
+        };
+
+        return {
+          subscribe,
+          getState,
+          setState,
+          processEvent,
+          setTransitionFunction,
+        };
       };
 
-      const ProtobufEncoder = {
-        name: "Protobuf",
-        format: "Binary",
-        schemaType: "protobuf",
-        encode: (data, MessageSchema) => {
-          const message = MessageSchema.create(data);
-          return MessageSchema.encode(message).finish();
-        },
-        decode: (buffer, MessageSchema) => MessageSchema.decode(buffer),
+      /**
+       * Creates a state machine with defined states and transitions
+       * @param {Object} config - Machine configuration
+       * @returns {Object} State manager with the machine behavior
+       */
+      const createStateMachine = (config) => {
+        const { states, initial, context = {} } = config;
+
+        // Create state manager
+        const stateManager = createStateManager();
+
+        /**
+         * State transition function to calculate next state based on current state and event
+         * @param {Object} state - Current state
+         * @param {Object} event - Event that triggered the transition
+         * @returns {Object} New state
+         */
+        const calculateNextState = (state, event) => {
+          const currentStateNode = states[state.current];
+
+          // Find transition for this event
+          const transition = currentStateNode?.on?.[event.type];
+          if (!transition) return state;
+
+          // Determine next state
+          const nextStateValue =
+            typeof transition === "string" ? transition : transition.target;
+
+          // Get actions to execute
+          const actions =
+            typeof transition === "string" ? [] : transition.actions || [];
+
+          // Execute actions to get new context
+          const nextContext = actions.reduce((ctx, action) => {
+            return action(ctx, event);
+          }, state.context);
+
+          // Return new state
+          return {
+            current: nextStateValue,
+            context: nextContext,
+            event,
+          };
+        };
+
+        // Configure the state manager with the transition function
+        stateManager.setTransitionFunction(calculateNextState);
+
+        // Initialize the machine with initial state
+        const initialState = {
+          current: initial,
+          context,
+          event: { type: "init" },
+        };
+
+        // Set the initial state
+        stateManager.setState(initialState);
+
+        return stateManager;
       };
 
-      const ThriftEncoder = {
-        name: "Thrift",
-        format: "Binary",
-        schemaType: "thrift",
-        encode: (data, Struct) => {
-          const transport = new Thrift.TBufferedTransport();
-          const protocol = new Thrift.TBinaryProtocol(transport);
-          const myStruct = new Struct(data);
-          myStruct.write(protocol);
-          return transport.outBuffers;
-        },
-        decode: (buffer, Struct) => {
-          const transport = new Thrift.TBufferedTransport(buffer);
-          const protocol = new Thrift.TBinaryProtocol(transport);
-          const myStruct = new Struct();
-          myStruct.read(protocol);
-          return myStruct;
-        },
+      /**
+       * ========================================================================
+       * ENCODER TYPES AND CONSTANTS
+       * ========================================================================
+       */
+
+      /**
+       * Available encoder types
+       */
+      const EncoderTypes = {
+        JSON: "json",
+        PROTOBUF: "protobuf",
+        AVRO: "avro",
       };
 
-      const AvroEncoder = {
-        name: "Avro",
-        format: "Binary",
-        schemaType: "avsc",
-        encode: (data, schema) => {
+      /**
+       * ========================================================================
+       * UTILITY FUNCTIONS
+       * 
+       * Helper functions that perform specific tasks without side effects
+       * ========================================================================
+       */
+
+      const utilities = {
+        /**
+         * Converts a buffer to a human-readable binary string
+         * @param {ArrayBuffer} buffer - Buffer to convert
+         * @returns {string} Binary representation with spaces between bytes
+         */
+        bufferToBinaryString: (buffer) => {
+          let binary = "";
+          const bytes = new Uint8Array(buffer);
+          for (let i = 0; i < bytes.byteLength; i++) {
+            binary += bytes[i].toString(2).padStart(8, "0") + " ";
+          }
+          return binary.trim();
+        },
+
+        /**
+         * Safely parses JSON with error handling
+         * @param {string} jsonString - JSON string to parse
+         * @returns {Object} Object with parsed data or error
+         */
+        parseJSON: (jsonString) => {
+          try {
+            return { data: JSON.parse(jsonString), error: null };
+          } catch (e) {
+            return { data: null, error: e.message };
+          }
+        },
+
+        /**
+         * Returns a promise that resolves after specified time
+         * @param {number} ms - Milliseconds to delay
+         * @returns {Promise} Promise that resolves after the delay
+         */
+        delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      };
+
+      /**
+       * ========================================================================
+       * DATA PROCESSING FUNCTIONS
+       * 
+       * Functions that handle data transformation and encoding
+       * ========================================================================
+       */
+
+      const dataProcessors = {
+        /**
+         * Formats data as JSON
+         * @param {Object} data - Data to encode
+         * @returns {string} Formatted JSON string
+         */
+        encodeWithJSON: (data) => JSON.stringify(data, null, 2),
+
+        /**
+         * Encodes data using Protocol Buffers
+         * @param {Object} data - Data to encode
+         * @param {Object} schema - Compiled Protobuf schema
+         * @returns {Uint8Array} Encoded binary data
+         */
+        encodeWithProtobuf: (data, schema) => {
+          const message = schema.create(data);
+          return schema.encode(message).finish();
+        },
+
+        /**
+         * Encodes data using Avro
+         * @param {Object} data - Data to encode
+         * @param {Object} schema - Parsed Avro schema
+         * @returns {Buffer} Encoded binary data
+         */
+        encodeWithAvro: (data, schema) => {
           const type = avro.Type.forSchema(schema);
           return type.toBuffer(data);
         },
-        decode: (buffer, schema) => {
-          const type = avro.Type.forSchema(schema);
-          return type.fromBuffer(buffer);
+
+        /**
+         * Compiles a Protocol Buffer schema from text
+         * @param {string} schemaText - Protocol Buffer schema definition
+         * @returns {Object} Compiled schema
+         */
+        parseProtobufSchema: (schemaText) => {
+          return protobuf.parse(schemaText).root.lookupType("Person");
+        },
+
+        /**
+         * Parses an Avro schema from JSON text
+         * @param {string} schemaText - Avro schema in JSON format
+         * @returns {Object} Parsed schema
+         */
+        parseAvroSchema: (schemaText) => {
+          return JSON.parse(schemaText);
         },
       };
 
-      // --------------------- Generic Resource Loader ---------------------
-      // This generic function accepts a URL mapping function and a transform function.
-      // It also caches responses by URL.
-      const createResourceLoader = (urlMapper, transform) => {
-        const cache = {};
-        return async (param) => {
-          const url = urlMapper(param);
-          if (cache[url]) return cache[url];
+      /**
+       * ========================================================================
+       * DATA FETCHING SERVICES
+       * 
+       * Functions that handle communication with the server
+       * ========================================================================
+       */
+
+      const apiService = {
+        /**
+         * Fetches a resource from the server
+         * @param {string} url - URL to fetch
+         * @returns {Promise<Response>} Server response
+         * @throws {Error} If the request fails
+         */
+        fetchResource: async (url) => {
           const response = await fetch(url);
           if (!response.ok) {
             throw new Error(`Failed to load resource: ${url}`);
           }
-          const data = await transform(response);
-          cache[url] = data;
-          return data;
-        };
+          return response;
+        },
+
+        /**
+         * Fetches text content from the server
+         * @param {string} url - URL to fetch
+         * @returns {Promise<string>} Text content
+         */
+        fetchText: async (url) => {
+          const response = await apiService.fetchResource(url);
+          return response.text();
+        },
+
+        /**
+         * Fetches JSON content from the server
+         * @param {string} url - URL to fetch
+         * @returns {Promise<Object>} Parsed JSON
+         */
+        fetchJSON: async (url) => {
+          const response = await apiService.fetchResource(url);
+          return response.json();
+        },
+
+        /**
+         * Loads a schema file from the server
+         * @param {string} schemaType - Type of schema to load
+         * @returns {Promise<string>} Schema content
+         */
+        loadSchema: async (schemaType) => {
+          return apiService.fetchText(`/person.${schemaType}`);
+        },
+
+        /**
+         * Loads sample data from the server
+         * @returns {Promise<Object>} Sample data object
+         */
+        loadPayload: async () => {
+          return apiService.fetchJSON("/person.json");
+        },
       };
 
-      // --------------------- Schema Helpers ---------------------
-      // Uses the generic loader to load a schema based on its type.
-      const loadSchema = createResourceLoader(
-        (schemaType) => `/person.${schemaType}`,
-        (response) => response.text()
-      );
+      /**
+       * ========================================================================
+       * ASYNCHRONOUS OPERATIONS
+       * 
+       * Functions that perform async operations and return events
+       * ========================================================================
+       */
 
-      // --------------------- Payload Loader ---------------------
-      // Uses the generic loader to load the JSON payload.
-      const loadPayload = createResourceLoader(
-        () => `/person.json`,
-        (response) => response.json()
-      );
-
-      // --------------------- Encoder Service ---------------------
-      const getSchemaFromTextarea = (encoder) => {
-        if (!encoder.schemaType) return null;
-        const schemaText = UIElements.schemaContentEl.value.trim();
-        if (!schemaText) {
-          throw new Error("No schema provided in the schema text area.");
-        }
-        if (encoder.schemaType === "avsc") {
-          return JSON.parse(schemaText);
-        }
-        return schemaText;
-      };
-
-      const encodeData = async (encoder, data) => {
-        let schema = null;
-        if (encoder.schemaType) {
-          schema = getSchemaFromTextarea(encoder);
-        }
-        return encoder.encode(data, schema);
-      };
-
-      const decodeData = async (encoder, data) => {
-        let schema = null;
-        if (encoder.schemaType) {
-          schema = getSchemaFromTextarea(encoder);
-        }
-        return encoder.decode(data, schema);
-      };
-
-      const bufferToBinaryString = (buffer) => {
-        let binary = "";
-        const bytes = new Uint8Array(buffer);
-        for (let i = 0; i < bytes.byteLength; i++) {
-          // Convert each byte to an 8-digit binary string and add a space between bytes.
-          binary += bytes[i].toString(2).padStart(8, "0") + " ";
-        }
-        return binary.trim();
-      };
-
-      const binaryStringToBuffer = (binaryStr) => {
-        // Remove extra whitespace and split by space.
-        const byteStrings = binaryStr.split(" ").filter((b) => b.length > 0);
-        const bytes = byteStrings.map((b) => parseInt(b, 2));
-        return new Uint8Array(bytes);
-      };
-
-      // --------------------- UI Elements ---------------------
-      const UIElements = (() => {
-        return {
-          encoderSelect: document.getElementById("encoderSelect"),
-          encoderNameEl: document.getElementById("encoderName"),
-          encoderFormatEl: document.getElementById("encoderFormat"),
-          encoderSchemaEl: document.getElementById("encoderSchema"),
-          schemaSection: document.getElementById("schema"),
-          schemaContentEl: document.getElementById("schemaContent"),
-          dataContentEl: document.getElementById("dataContent"),
-          encodedContentEl: document.getElementById("encodedContent"),
-          errorEl: document.getElementById("error"),
-          encodeButtonEl: document.getElementById("encodeButton"),
-          decodeButtonEl: document.getElementById("decodeButton"),
-        };
-      })();
-
-      // --------------------- Error Controller ---------------------
-      const ErrorController = (() => {
-        const displayError = (message) => {
-          UIElements.errorEl.textContent = message;
-        };
-        const clearError = () => {
-          UIElements.errorEl.textContent = "";
-        };
-        return { displayError, clearError };
-      })();
-
-      // --------------------- Encoder Info Controller ---------------------
-      const EncoderInfoController = (() => {
-        const updateEncoderInfo = (
-          name,
-          format,
-          schemaType,
-          schemaContent = ""
-        ) => {
-          UIElements.encoderNameEl.textContent = name;
-          UIElements.encoderFormatEl.textContent = format;
-          if (schemaType) {
-            UIElements.schemaSection.style.display = "block";
-            UIElements.encoderSchemaEl.textContent = `Schema (${schemaType})`;
-            UIElements.schemaContentEl.value = schemaContent;
-          } else {
-            UIElements.schemaSection.style.display = "none";
-          }
-        };
-        return { updateEncoderInfo };
-      })();
-
-      // --------------------- Data Controller ---------------------
-      const DataController = (() => {
-        const getDataInput = () => {
+      const asyncOperations = {
+        /**
+         * Loads a schema based on the selected encoder type
+         * @param {string} schemaType - Type of schema to load
+         * @returns {Function} Async function that returns an event
+         */
+        loadSchema: (schemaType) => async () => {
           try {
-            return JSON.parse(UIElements.dataContentEl.value);
-          } catch (e) {
-            ErrorController.displayError("Invalid JSON in data input.");
-            return null;
-          }
-        };
-        return { getDataInput, dataContentEl: UIElements.dataContentEl };
-      })();
+            if (!schemaType) {
+              return { type: "SCHEMA_LOADED", schema: null };
+            }
 
-      // --------------------- Encoded Controller ---------------------
-      const EncodedController = (() => {
-        const displayEncodedResult = (result, format) => {
-          if (format === "Binary") {
+            const schema = await apiService.loadSchema(schemaType);
+            return { type: "SCHEMA_LOADED", schema };
+          } catch (error) {
+            return {
+              type: "ERROR",
+              message: `Failed to load schema: ${error.message}`,
+            };
+          }
+        },
+
+        /**
+         * Loads initial sample data
+         * @returns {Function} Async function that returns an event
+         */
+        loadInitialData: () => async () => {
+          try {
+            const data = await apiService.loadPayload();
+            return { type: "DATA_LOADED", data };
+          } catch (error) {
+            return {
+              type: "ERROR",
+              message: `Failed to load data: ${error.message}`,
+            };
+          }
+        },
+
+        /**
+         * Encodes data using the selected encoder
+         * @param {Object} data - Data to encode
+         * @param {string} encoderType - Type of encoder to use
+         * @param {string} schema - Schema for the encoder
+         * @returns {Function} Async function that returns an event
+         */
+        encodeData: (data, encoderType, schema) => async () => {
+          try {
+            if (!data) {
+              return { type: "DATA_ENCODED", result: null };
+            }
+
+            let result;
+            if (encoderType === EncoderTypes.PROTOBUF) {
+              const parsedSchema = dataProcessors.parseProtobufSchema(schema);
+              result = dataProcessors.encodeWithProtobuf(data, parsedSchema);
+            } else if (encoderType === EncoderTypes.AVRO) {
+              const parsedSchema = dataProcessors.parseAvroSchema(schema);
+              result = dataProcessors.encodeWithAvro(data, parsedSchema);
+            } else {
+              // JSON encoder
+              result = dataProcessors.encodeWithJSON(data);
+            }
+
+            return { type: "DATA_ENCODED", result };
+          } catch (error) {
+            return {
+              type: "ERROR",
+              message: `Failed to encode data: ${error.message}`,
+            };
+          }
+        },
+      };
+
+      /**
+       * ========================================================================
+       * STATE UPDATE FUNCTIONS
+       * 
+       * Functions that update the application state based on events
+       * ========================================================================
+       */
+
+      const stateUpdaters = {
+        /**
+         * Updates the selected encoder index
+         * @param {Object} context - Current context
+         * @param {Object} event - Event that triggered the update
+         * @returns {Object} Updated context
+         */
+        setEncoderIndex: (context, event) => ({
+          ...context,
+          currentEncoderIndex: event.index,
+        }),
+
+        /**
+         * Updates the schema in the application state
+         * @param {Object} context - Current context
+         * @param {Object} event - Event that triggered the update
+         * @returns {Object} Updated context
+         */
+        setSchema: (context, event) => ({
+          ...context,
+          schema: event.schema,
+        }),
+
+        /**
+         * Updates the data in the application state
+         * @param {Object} context - Current context
+         * @param {Object} event - Event that triggered the update
+         * @returns {Object} Updated context
+         */
+        setData: (context, event) => ({
+          ...context,
+          data: event.data,
+          error: null, // Clear error when data is set
+        }),
+
+        /**
+         * Updates the encoded result in the application state
+         * @param {Object} context - Current context
+         * @param {Object} event - Event that triggered the update
+         * @returns {Object} Updated context
+         */
+        setEncodedResult: (context, event) => ({
+          ...context,
+          encodedResult: event.result,
+        }),
+
+        /**
+         * Sets an error message in the application state
+         * @param {Object} context - Current context
+         * @param {Object} event - Event that triggered the update
+         * @returns {Object} Updated context
+         */
+        setError: (context, event) => ({
+          ...context,
+          error: event.message,
+        }),
+
+        /**
+         * Parses JSON data and updates the application state
+         * @param {Object} context - Current context
+         * @param {Object} event - Event that triggered the update
+         * @returns {Object} Updated context
+         */
+        parseJSONData: (context, event) => {
+          const { data, error } = utilities.parseJSON(event.jsonString);
+
+          if (error) {
+            return {
+              ...context,
+              error: `Invalid JSON: ${error}`,
+            };
+          }
+
+          return {
+            ...context,
+            data,
+            error: null,
+          };
+        },
+      };
+
+      /**
+       * ========================================================================
+       * APPLICATION STATE MACHINE
+       * 
+       * Defines the application's states, transitions, and behavior
+       * ========================================================================
+       */
+
+      /**
+       * Creates the state machine for the encoder application
+       * @returns {Object} Configured state machine
+       */
+      const createEncoderStateMachine = () => {
+        // Initial application state
+        const initialContext = {
+          encoders: [
+            {
+              name: "JSON",
+              format: "String",
+              schemaType: null,
+              type: EncoderTypes.JSON,
+            },
+            {
+              name: "Protobuf",
+              format: "Binary",
+              schemaType: "protobuf",
+              type: EncoderTypes.PROTOBUF,
+            },
+            {
+              name: "Avro",
+              format: "Binary",
+              schemaType: "avsc",
+              type: EncoderTypes.AVRO,
+            },
+          ],
+          currentEncoderIndex: 0,
+          data: null,
+          schema: null,
+          encodedResult: null,
+          error: null,
+        };
+
+        // Create the state machine with states and transitions
+        return createStateMachine({
+          initial: "initializing",
+          context: initialContext,
+          states: {
+            /**
+             * Application is starting up
+             */
+            initializing: {
+              on: {
+                init: {
+                  target: "loadingData",
+                },
+              },
+            },
+
+            /**
+             * Loading initial sample data
+             */
+            loadingData: {
+              on: {
+                DATA_LOADED: {
+                  target: "loadingSchema",
+                  actions: [stateUpdaters.setData],
+                },
+                ERROR: {
+                  target: "ready",
+                  actions: [stateUpdaters.setError],
+                },
+              },
+            },
+
+            /**
+             * Loading schema for the selected encoder
+             */
+            loadingSchema: {
+              on: {
+                SCHEMA_LOADED: {
+                  target: "encoding",
+                  actions: [stateUpdaters.setSchema],
+                },
+                ERROR: {
+                  target: "ready",
+                  actions: [stateUpdaters.setError],
+                },
+              },
+            },
+
+            /**
+             * Encoding data with the selected encoder
+             */
+            encoding: {
+              on: {
+                DATA_ENCODED: {
+                  target: "ready",
+                  actions: [stateUpdaters.setEncodedResult],
+                },
+                ERROR: {
+                  target: "ready",
+                  actions: [stateUpdaters.setError],
+                },
+              },
+            },
+
+            /**
+             * Application is ready for user interaction
+             */
+            ready: {
+              on: {
+                // Handle encoder selection change
+                CHANGE_ENCODER: {
+                  target: "loadingSchema",
+                  actions: [stateUpdaters.setEncoderIndex],
+                },
+
+                // Handle data input changes
+                UPDATE_DATA: {
+                  target: "encoding",
+                  actions: [stateUpdaters.parseJSONData],
+                },
+
+                // Handle direct data loading (e.g. from file)
+                DATA_LOADED: {
+                  target: "encoding",
+                  actions: [stateUpdaters.setData],
+                },
+
+                // Handle errors
+                ERROR: {
+                  target: "ready", // Stay in ready state
+                  actions: [stateUpdaters.setError],
+                },
+              },
+            },
+          },
+        });
+      };
+
+      /**
+       * ========================================================================
+       * ASYNC OPERATION EXECUTOR
+       * 
+       * Executes asynchronous operations and sends resulting events to the state machine
+       * ========================================================================
+       */
+
+      /**
+       * Executes an async operation and sends the resulting event to the state machine
+       * @param {Object} stateMachine - State machine to send events to
+       * @param {Function} operationFn - Async operation to execute
+       */
+      const executeAsyncOperation = async (stateMachine, operationFn) => {
+        try {
+          const event = await operationFn();
+          if (event) {
+            stateMachine.processEvent(event);
+          }
+        } catch (error) {
+          console.error("Operation error:", error);
+          stateMachine.processEvent({ type: "ERROR", message: error.message });
+        }
+      };
+
+      /**
+       * ========================================================================
+       * UI COMPONENTS
+       * 
+       * Functions for working with UI elements
+       * ========================================================================
+       */
+
+      /**
+       * Gets all UI elements used by the application
+       * @returns {Object} Object containing UI element references
+       */
+      const getUIElements = () => ({
+        encoderSelect: document.getElementById("encoderSelect"),
+        encoderNameEl: document.getElementById("encoderName"),
+        encoderFormatEl: document.getElementById("encoderFormat"),
+        encoderSchemaEl: document.getElementById("encoderSchema"),
+        encoderSection: document.getElementById("encoded"),
+        schemaSection: document.getElementById("schema"),
+        schemaContentEl: document.getElementById("schemaContent"),
+        dataContentEl: document.getElementById("dataContent"),
+        encodedContentEl: document.getElementById("encodedContent"),
+        errorEl: document.getElementById("error"),
+      });
+
+      /**
+       * UI generation functions
+       */
+      const uiComponents = {
+        /**
+         * Creates option elements for the encoder select dropdown
+         * @param {Array} encoders - Array of encoder objects
+         * @returns {Array} Array of option elements
+         */
+        createEncoderOptions: (encoders) => {
+          return encoders.map((encoder, index) => {
+            const option = document.createElement("option");
+            option.value = index;
+            option.textContent = encoder.name;
+            return option;
+          });
+        },
+      };
+
+      /**
+       * Updates the UI based on the current state
+       * @param {Object} state - Current application state
+       * @param {Object} elements - UI elements
+       */
+      const updateUserInterface = (state, elements) => {
+        const {
+          encoders,
+          currentEncoderIndex,
+          schema,
+          data,
+          encodedResult,
+          error,
+        } = state.context;
+        const encoder = encoders[currentEncoderIndex];
+
+        // Update encoder info display
+        elements.encoderNameEl.textContent = encoder.name;
+        elements.encoderFormatEl.textContent = encoder.format;
+
+        // Update schema section visibility and content
+        if (encoder.schemaType) {
+          elements.schemaSection.style.display = "block";
+          elements.encoderSchemaEl.textContent = `Schema (${encoder.schemaType})`;
+          elements.schemaContentEl.value = schema || "";
+        } else {
+          elements.schemaSection.style.display = "none";
+        }
+
+        // Update data section with current data
+        if (data) {
+          elements.dataContentEl.value = JSON.stringify(data, null, 2);
+        }
+
+        // Update encoded result section with encoding output
+        if (encodedResult) {
+          elements.encoderSection.style.display = "block";
+          if (encoder.format === "Binary") {
             let binaryResult = "";
-            if (result instanceof Uint8Array) {
-              binaryResult = bufferToBinaryString(result);
-            } else if (Array.isArray(result)) {
-              binaryResult = result
-                .map((r) => bufferToBinaryString(r))
+            if (encodedResult instanceof Uint8Array) {
+              binaryResult = utilities.bufferToBinaryString(encodedResult);
+            } else if (Array.isArray(encodedResult)) {
+              binaryResult = encodedResult
+                .map((r) => utilities.bufferToBinaryString(r))
                 .join("\n");
             }
-            UIElements.encodedContentEl.value = binaryResult;
+
+            elements.encoderSection.style.display = "block";
+            elements.encodedContentEl.value = binaryResult;
           } else {
-            UIElements.encodedContentEl.value = result;
+            elements.encoderSection.style.display = "none";
           }
-        };
+        } else {
+          // Clear the encoded result when none is available
+          elements.encodedContentEl.value = "";
+        }
 
-        const getEncodedInput = (format) => {
-          const input = UIElements.encodedContentEl.value.trim();
-          return format === "Binary" ? binaryStringToBuffer(input) : input;
-        };
-
-        return { displayEncodedResult, getEncodedInput };
-      })();
-
-      // --------------------- Main Application Logic ---------------------
-      const initApp = () => {
-        const encoders = [
-          JSONEncoder,
-          ProtobufEncoder,
-          ThriftEncoder,
-          AvroEncoder,
-        ];
-        let currentEncoderIndex = 0;
-
-        // Populate the encoder dropdown.
-        encoders.forEach((encoder, index) => {
-          const option = document.createElement("option");
-          option.value = index;
-          option.textContent = encoder.name;
-          UIElements.encoderSelect.appendChild(option);
-        });
-
-        const renderCurrentEncoder = async () => {
-          ErrorController.clearError();
-          const encoder = encoders[currentEncoderIndex];
-          let schemaContent = "";
-          if (encoder.schemaType) {
-            try {
-              schemaContent = await loadSchema(encoder.schemaType);
-            } catch (e) {
-              ErrorController.displayError(e.message);
-            }
-          }
-          EncoderInfoController.updateEncoderInfo(
-            encoder.name,
-            encoder.format,
-            encoder.schemaType,
-            schemaContent
-          );
-        };
-
-        const renderCurrentData = async () => {
-          try {
-            const payload = await loadPayload();
-            UIElements.dataContentEl.value = JSON.stringify(payload, null, 2);
-          } catch (e) {
-            ErrorController.displayError(e.message);
-          }
-        };
-
-        UIElements.encoderSelect.addEventListener("change", async (e) => {
-          currentEncoderIndex = parseInt(e.target.value, 10);
-          await renderCurrentEncoder();
-
-          const data = DataController.getDataInput();
-          if (data !== null) {
-            try {
-              const encoder = encoders[currentEncoderIndex];
-              const result = await encodeData(encoder, data);
-              EncodedController.displayEncodedResult(result, encoder.format);
-            } catch (err) {
-              ErrorController.displayError(err.message);
-            }
-          }
-        });
-
-        UIElements.encodeButtonEl.addEventListener("click", async () => {
-          ErrorController.clearError();
-          const encoder = encoders[currentEncoderIndex];
-          const data = DataController.getDataInput();
-          if (data === null) return;
-          try {
-            const result = await encodeData(encoder, data);
-            EncodedController.displayEncodedResult(result, encoder.format);
-          } catch (e) {
-            ErrorController.displayError(e.message);
-          }
-        });
-
-        UIElements.decodeButtonEl.addEventListener("click", async () => {
-          ErrorController.clearError();
-          const encoder = encoders[currentEncoderIndex];
-          try {
-            const encodedInput = EncodedController.getEncodedInput(
-              encoder.format
-            );
-            const result = await decodeData(encoder, encodedInput);
-            DataController.dataContentEl.value = JSON.stringify(
-              result,
-              null,
-              2
-            );
-          } catch (e) {
-            ErrorController.displayError(e.message);
-          }
-        });
-
-        // Initial render.
-        renderCurrentEncoder();
-        renderCurrentData();
+        // Update error message display
+        elements.errorEl.textContent = error || "";
+        elements.errorEl.className = error ? "error" : "";
       };
 
-      document.addEventListener("DOMContentLoaded", initApp);
+      /**
+       * ========================================================================
+       * EVENT HANDLING
+       * 
+       * Functions for creating and handling UI events
+       * ========================================================================
+       */
+
+      /**
+       * Creates an event stream from DOM events
+       * @param {Element} element - DOM element to listen to
+       * @param {string} eventName - Event name to listen for
+       * @returns {Object} Object with subscribe method
+       */
+      const createEventStream = (element, eventName) => {
+        const handlers = new Set();
+
+        const listener = (event) => {
+          handlers.forEach((handler) => handler(event));
+        };
+
+        element.addEventListener(eventName, listener);
+
+        return {
+          /**
+           * Subscribe to the event stream
+           * @param {Function} handler - Function to call when event occurs
+           * @returns {Function} Unsubscribe function
+           */
+          subscribe: (handler) => {
+            handlers.add(handler);
+            return () => handlers.delete(handler);
+          },
+        };
+      };
+
+      /**
+       * ========================================================================
+       * MAIN APPLICATION
+       * 
+       * Application initialization and setup
+       * ========================================================================
+       */
+
+      // Initialize application when DOM is loaded
+      document.addEventListener("DOMContentLoaded", () => {
+        console.log("DOM loaded, initializing application");
+
+        // Get UI elements
+        const uiElements = getUIElements();
+
+        // Create application state machine
+        const appStateMachine = createEncoderStateMachine();
+        console.log("State machine created:", appStateMachine.getState());
+
+        // Subscribe to state changes and update UI
+        appStateMachine.subscribe((state) => {
+          console.log("State changed:", state.current, state);
+          updateUserInterface(state, uiElements);
+
+          // Handle side effects based on current state
+          if (state.current === "loadingData") {
+            console.log("Loading initial data");
+            executeAsyncOperation(
+              appStateMachine, 
+              asyncOperations.loadInitialData()
+            );
+          } else if (state.current === "loadingSchema") {
+            const { encoders, currentEncoderIndex } = state.context;
+            const schemaType = encoders[currentEncoderIndex].schemaType;
+            console.log("Loading schema:", schemaType);
+            executeAsyncOperation(
+              appStateMachine, 
+              asyncOperations.loadSchema(schemaType)
+            );
+          } else if (state.current === "encoding") {
+            const { data, encoders, currentEncoderIndex, schema } =
+              state.context;
+            const encoder = encoders[currentEncoderIndex];
+            console.log("Encoding data with:", encoder.name);
+            executeAsyncOperation(
+              appStateMachine, 
+              asyncOperations.encodeData(data, encoder.type, schema)
+            );
+          }
+        });
+
+        // Set up event handlers
+
+        // Handle encoder selection changes
+        const encoderSelectEvents = createEventStream(
+          uiElements.encoderSelect, 
+          "change"
+        );
+        
+        encoderSelectEvents.subscribe((event) => {
+          const index = parseInt(event.target.value, 10);
+          console.log("Encoder changed to:", index);
+          appStateMachine.processEvent({ type: "CHANGE_ENCODER", index });
+        });
+
+        // Handle data input changes with debouncing
+        const dataInputEvents = createEventStream(
+          uiElements.dataContentEl, 
+          "input"
+        );
+
+        // Debounce the input events to prevent too many updates
+        let debounceTimer;
+        dataInputEvents.subscribe((event) => {
+          clearTimeout(debounceTimer);
+          debounceTimer = setTimeout(() => {
+            console.log("Data input changed");
+            appStateMachine.processEvent({
+              type: "UPDATE_DATA",
+              jsonString: event.target.value,
+            });
+          }, 300); // 300ms debounce time
+        });
+
+        // Populate encoder options dropdown
+        const encoderOptions = uiComponents.createEncoderOptions(
+          appStateMachine.getState().context.encoders
+        );
+        
+        encoderOptions.forEach((option) => 
+          uiElements.encoderSelect.appendChild(option)
+        );
+
+        // Initialize the application
+        console.log("Starting application");
+        appStateMachine.processEvent({ type: "init" });
+      });
     </script>
   </body>
 </html>

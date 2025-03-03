@@ -1,0 +1,7 @@
+{
+  "dependencies": {
+    "connect-livereload": "^0.6.1",
+    "express": "^4.21.2",
+    "livereload": "^0.9.3"
+  }
+}
